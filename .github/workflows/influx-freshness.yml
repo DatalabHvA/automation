@@ -1,0 +1,89 @@
+name: InfluxDB freshness check
+
+# Runs hourly and pings healthchecks.io.
+# Pair with healthchecks.io Period = 1 hour, Grace = 1 hour.
+#
+# The minute is deliberately NOT :00. GitHub's scheduled runs are
+# best-effort and the top of the hour is the most congested slot, so a run
+# scheduled at :00 is the most likely to be delayed. :23 is arbitrary but
+# quieter.
+#
+# NOTE: GitHub disables scheduled workflows in a repository with no commit
+# activity for 60 days. When that happens the pings simply stop, and
+# healthchecks.io alerts you -- which is exactly what a dead man's switch
+# is for. If you see "no ping received" with no other explanation, check
+# whether this workflow was auto-disabled.
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+    inputs:
+      max_age_minutes:
+        description: "Override the staleness threshold for a manual run"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: influx-freshness
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check bucket freshness
+        env:
+          # Host, org and bucket live in SECRETS rather than variables:
+          # repository variables are readable by anyone who can read the
+          # repo (everyone, if it is public), and GitHub masks secrets in
+          # job logs. The hostname is not truly secret -- it is public DNS
+          # -- but there is no reason to publish it either.
+          INFLUX_HOST: ${{ secrets.INFLUX_HOST }}
+          INFLUX_ORG: ${{ secrets.INFLUX_ORG }}
+          INFLUX_BUCKET: ${{ secrets.INFLUX_BUCKET }}
+          INFLUX_TOKEN: ${{ secrets.INFLUX_READ_TOKEN }}
+          HEALTHCHECKS_URL: ${{ secrets.HEALTHCHECKS_URL }}
+          INFLUX_PORT: ${{ vars.INFLUX_PORT }}
+          INFLUX_MAX_AGE_MINUTES: ${{ github.event.inputs.max_age_minutes || vars.INFLUX_MAX_AGE_MINUTES }}
+          # Replace hostname, bucket and measurement names with stable
+          # pseudonyms in the log and in the healthchecks.io ping body, so
+          # neither names the data source. Run the script locally without
+          # --redact to see which pseudonym is which.
+          INFLUX_REDACT: "1"
+        run: |
+          python influx_freshness_check.py \
+            --no-fail-on-stale \
+            --ignore-measurement diag_test \
+            --ignore-measurement conn_test \
+            --ignore-measurement manual_test \
+            --ignore-measurement test
+
+# --no-fail-on-stale: stale data still sends the /fail ping, but the job
+# exits 0. A red run here therefore means THE CHECK is broken (cannot reach
+# InfluxDB, token rejected, bucket unreadable), not that the feed is down.
+# Without this, a feed that stays down for days produces an hourly red cross
+# plus GitHub's own failure notifications on top of healthchecks.io -- two
+# alerting systems for one fact, and an Actions tab too red to read.
+
+# The ignored measurements are connection-test leftovers that get written
+# by hand at random times and would otherwise flap the alarm. Adjust the
+# list to match whatever test measurements exist in your own bucket.
+#
+# This is a denylist, so a NEW measurement appearing in the bucket is
+# monitored automatically. To monitor only known feeds instead, replace the
+# ignore flags with one --measurement NAME per feed -- safer against noise,
+# but a new feed is then silently unmonitored.

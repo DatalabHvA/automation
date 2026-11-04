@@ -1,0 +1,15 @@
+# Never commit credentials or local config
+.env
+*.env
+secrets/
+*.token
+*.pem
+*.key
+
+# Local run output
+*.log
+
+__pycache__/
+*.pyc
+.venv/
+venv/
