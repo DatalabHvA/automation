@@ -1,12 +1,28 @@
 name: InfluxDB freshness check
 
 # Runs hourly and pings healthchecks.io.
-# Pair with healthchecks.io Period = 1 hour, Grace = 1 hour.
+# Pair with healthchecks.io Period = 1 hour, Grace = 2 hours.
 #
-# The minute is deliberately NOT :00. GitHub's scheduled runs are
-# best-effort and the top of the hour is the most congested slot, so a run
-# scheduled at :00 is the most likely to be delayed. :23 is arbitrary but
-# quieter.
+# Why the grace is twice the period: GitHub's scheduler has no reserved
+# capacity -- scheduled runs queue behind every push and PR on the
+# platform -- and a fire that is not picked up before the NEXT fire is due
+# is dropped without retry. Measured here: 2 runs out of an expected 16
+# overnight. A 1-hour grace therefore alerts about GitHub rather than about
+# the data. A 2-hour grace tolerates one dropped run and still catches a
+# genuinely dead monitor.
+#
+# This does NOT slow down detection of stale data: whenever a run does
+# happen, it sends the /fail ping immediately.
+#
+# The minute is deliberately NOT near :00. GitHub documents the start of
+# every hour as peak load, so a run scheduled there joins the longest
+# queue. Moving the minute earlier does not buy wiggle room -- the gap to
+# the next fire is 60 minutes whatever minute you pick -- it only picks a
+# busier queue. :23 is arbitrary but mid-hour and quieter.
+#
+# If drops stay frequent, the lever that actually helps is the INTERVAL:
+# "23 */2 * * *" gives a fire two hours to be picked up instead of one.
+# The reliable answer is cron on an always-on machine; see the README.
 #
 # NOTE: GitHub disables scheduled workflows in a repository with no commit
 # activity for 60 days. When that happens the pings simply stop, and
@@ -27,9 +43,11 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: influx-freshness
-  cancel-in-progress: false
+# No `concurrency:` block here, deliberately. GitHub cancels a PENDING run
+# when another joins the same concurrency group, so with delayed scheduled
+# runs piling up it discards fires that would otherwise have completed. The
+# job takes about 8 seconds, so overlapping runs are not a real risk and
+# serialising them buys nothing.
 
 jobs:
   check:
