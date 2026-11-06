@@ -55,13 +55,15 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      # checkout@v4 runs on Node 20, which GitHub has deprecated; v5 targets
+      # Node 24.
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      # No setup-python step. The runner image already ships Python 3, and
+      # this script imports nothing outside the standard library, so the
+      # action only added a second deprecated dependency and a few seconds
+      # of runtime. Fewer actions, fewer deprecation treadmills.
 
       - name: Check bucket freshness
         env:
@@ -83,7 +85,7 @@ jobs:
           # --redact to see which pseudonym is which.
           INFLUX_REDACT: "1"
         run: |
-          python influx_freshness_check.py \
+          python3 influx_freshness_check.py \
             --no-fail-on-stale \
             --ignore-measurement diag_test \
             --ignore-measurement conn_test \

@@ -166,6 +166,35 @@ def ping(ping_url, suffix="", body="", timeout=PING_TIMEOUT):
 # main
 # --------------------------------------------------------------------------
 
+def load_env_file(path):
+    """Read KEY=value lines into os.environ before the parser reads defaults.
+
+    Lets a scheduler invoke the script with no credentials on the command
+    line -- useful under cron, and necessary under Home Assistant, where
+    `shell_command` entries are visible in the configuration and the
+    process list.
+
+    Values are taken literally: no quoting, no escapes, no variable
+    expansion. Lines that are blank or start with # are skipped. Existing
+    environment variables win, so you can still override one ad hoc.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except OSError as exc:
+        print("Cannot read env file " + path + ": " + str(exc), file=sys.stderr)
+        raise SystemExit(2)
+
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key and key not in os.environ:
+            os.environ[key] = value.strip()
+
+
 def env_default(name, fallback=None):
     value = os.environ.get(name)
     return value if value not in (None, "") else fallback
@@ -175,6 +204,10 @@ def build_parser():
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--env-file",
+                        help="read KEY=value settings from this file before "
+                             "anything else, so no credential appears on the "
+                             "command line or in the process list")
     parser.add_argument("--host", default=env_default("INFLUX_HOST"))
     parser.add_argument("--port", type=int,
                         default=int(env_default("INFLUX_PORT", "443")))
@@ -224,6 +257,15 @@ def build_parser():
 
 def main():
     global REDACT
+
+    # --env-file must be handled before the main parser builds its
+    # defaults, because those defaults read os.environ at build time.
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--env-file")
+    known, _ = pre.parse_known_args()
+    if known.env_file:
+        load_env_file(known.env_file)
+
     args = build_parser().parse_args()
     REDACT = args.redact
 
